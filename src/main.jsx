@@ -148,7 +148,21 @@ function App() {
       }
     });
     setPaymentBusy(false);
-    if (error) { setMessage(error.message || "Erreur de paiement."); return; }
+    if (error) {
+      let detail = error.message || "Erreur de paiement.";
+      try {
+        if (error.context) {
+          const body = await error.context.text();
+          if (body) detail += " — " + body;
+        }
+      } catch {}
+      setMessage(detail);
+      return;
+    }
+    if (!data) {
+      setMessage("Le serveur de paiement n'a renvoyé aucune réponse.");
+      return;
+    }
     if (data?.authorization_url) {
       window.location.href = data.authorization_url;
       return;
