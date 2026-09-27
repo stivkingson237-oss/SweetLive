@@ -62,7 +62,15 @@ function App() {
     const { data, error } = await supabase.from("live_streams").insert({ host_id: session.user.id, title }).select("*, profiles(display_name,username)").single();
     if (error) { setMessage(error.message); return; }
     setSelectedLive(data);
-    setCameraOpen(true);\n    const channel = supabase.channel("live-signal-"+data.id).on("broadcast",{event:"signal"},async ({payload})=>{\n      if (payload.type === "join" && payload.sender_id !== session.user.id) {\n        const pc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]}); peerRef.current=pc;\n        streamRef.current?.getTracks().forEach(t=>pc.addTrack(t,streamRef.current));\n        pc.onicecandidate=async e=>{if(e.candidate) await supabase.from("live_signals").insert({live_id:data.id,sender_id:session.user.id,recipient_id:payload.sender_id,type:"ice",payload:e.candidate});};\n        const offer=await pc.createOffer(); await pc.setLocalDescription(offer); await supabase.from("live_signals").insert({live_id:data.id,sender_id:session.user.id,recipient_id:payload.sender_id,type:"offer",payload:offer});\n      }\n    }).subscribe();
+    setCameraOpen(true);
+    const channel = supabase.channel("live-signal-"+data.id).on("broadcast",{event:"signal"},async ({payload})=>{
+      if (payload.type === "join" && payload.sender_id !== session.user.id) {
+        const pc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]}); peerRef.current=pc;
+        streamRef.current?.getTracks().forEach(t=>pc.addTrack(t,streamRef.current));
+        pc.onicecandidate=async e=>{if(e.candidate) await supabase.from("live_signals").insert({live_id:data.id,sender_id:session.user.id,recipient_id:payload.sender_id,type:"ice",payload:e.candidate});};
+        const offer=await pc.createOffer(); await pc.setLocalDescription(offer); await supabase.from("live_signals").insert({live_id:data.id,sender_id:session.user.id,recipient_id:payload.sender_id,type:"offer",payload:offer});
+      }
+    }).subscribe();
     setLives((v) => [data, ...v]);
     setTimeout(async () => {
       try {
@@ -78,7 +86,26 @@ function App() {
     streamRef.current = null;
   }
 
-  async function openViewer(live) {\n    if (!session) { setAuthOpen(true); return; }\n    setSelectedLive(live); setViewerOpen(true);\n    const pc = new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]});\n    peerRef.current = pc;\n    pc.ontrack = (e) => { if (viewerVideoRef.current) viewerVideoRef.current.srcObject = e.streams[0]; };\n    pc.onicecandidate = async (e) => { if (e.candidate) await supabase.from("live_signals").insert({live_id:live.id,sender_id:session.user.id,type:"ice",payload:e.candidate}); };\n    const channel = supabase.channel("live-signal-"+live.id).on("broadcast",{event:"signal"},async ({payload})=>{\n      if (payload.recipient_id && payload.recipient_id !== session.user.id) return;\n      if (payload.type === "offer") { await pc.setRemoteDescription(payload.payload); const answer=await pc.createAnswer(); await pc.setLocalDescription(answer); await supabase.from("live_signals").insert({live_id:live.id,sender_id:session.user.id,recipient_id:payload.sender_id,type:"answer",payload:answer}); }\n      if (payload.type === "ice" && payload.sender_id !== session.user.id) { try { await pc.addIceCandidate(payload.payload); } catch {} }\n    }).subscribe();\n    await supabase.from("live_signals").insert({live_id:live.id,sender_id:session.user.id,type:"join",payload:{}});\n    const {data:offers}=await supabase.from("live_signals").select("*").eq("live_id",live.id).eq("type","offer").order("created_at",{ascending:false}).limit(1);\n    if (offers?.[0]) { await pc.setRemoteDescription(offers[0].payload); const answer=await pc.createAnswer(); await pc.setLocalDescription(answer); await supabase.from("live_signals").insert({live_id:live.id,sender_id:session.user.id,recipient_id:offers[0].sender_id,type:"answer",payload:answer}); }\n  }\n\n  async function endViewer() { if (peerRef.current) peerRef.current.close(); peerRef.current=null; setViewerOpen(false); }\n\n  async function endLive() {
+  async function openViewer(live) {
+    if (!session) { setAuthOpen(true); return; }
+    setSelectedLive(live); setViewerOpen(true);
+    const pc = new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]});
+    peerRef.current = pc;
+    pc.ontrack = (e) => { if (viewerVideoRef.current) viewerVideoRef.current.srcObject = e.streams[0]; };
+    pc.onicecandidate = async (e) => { if (e.candidate) await supabase.from("live_signals").insert({live_id:live.id,sender_id:session.user.id,type:"ice",payload:e.candidate}); };
+    const channel = supabase.channel("live-signal-"+live.id).on("broadcast",{event:"signal"},async ({payload})=>{
+      if (payload.recipient_id && payload.recipient_id !== session.user.id) return;
+      if (payload.type === "offer") { await pc.setRemoteDescription(payload.payload); const answer=await pc.createAnswer(); await pc.setLocalDescription(answer); await supabase.from("live_signals").insert({live_id:live.id,sender_id:session.user.id,recipient_id:payload.sender_id,type:"answer",payload:answer}); }
+      if (payload.type === "ice" && payload.sender_id !== session.user.id) { try { await pc.addIceCandidate(payload.payload); } catch {} }
+    }).subscribe();
+    await supabase.from("live_signals").insert({live_id:live.id,sender_id:session.user.id,type:"join",payload:{}});
+    const {data:offers}=await supabase.from("live_signals").select("*").eq("live_id",live.id).eq("type","offer").order("created_at",{ascending:false}).limit(1);
+    if (offers?.[0]) { await pc.setRemoteDescription(offers[0].payload); const answer=await pc.createAnswer(); await pc.setLocalDescription(answer); await supabase.from("live_signals").insert({live_id:live.id,sender_id:session.user.id,recipient_id:offers[0].sender_id,type:"answer",payload:answer}); }
+  }
+
+  async function endViewer() { if (peerRef.current) peerRef.current.close(); peerRef.current=null; setViewerOpen(false); }
+
+  async function endLive() {
     if (!selectedLive) return;
     await supabase.from("live_streams").update({ status: "ended", ended_at: new Date().toISOString() }).eq("id", selectedLive.id);
     stopCamera(); if(peerRef.current) peerRef.current.close(); peerRef.current=null; setCameraOpen(false); setSelectedLive(null); loadData();
@@ -112,7 +139,9 @@ function App() {
       </div>
     </section>
 
-    {viewerOpen && selectedLive && <section className="studio"><div className="studioTop"><div><span className="badge">● SPECTATEUR</span><h2>{selectedLive.title}</h2></div><button onClick={endViewer}>Quitter</button></div><video ref={viewerVideoRef} autoPlay playsInline controls /><div className="giftRow">{gifts.map(g=><button className="gift" key={g.id} onClick={()=>sendGift(g)}>{g.emoji} {g.name}<small>{g.price_xaf.toLocaleString("fr-FR")} FCFA</small></button>)}</div></section>}\n\n    {cameraOpen && <section className="studio">
+    {viewerOpen && selectedLive && <section className="studio"><div className="studioTop"><div><span className="badge">● SPECTATEUR</span><h2>{selectedLive.title}</h2></div><button onClick={endViewer}>Quitter</button></div><video ref={viewerVideoRef} autoPlay playsInline controls /><div className="giftRow">{gifts.map(g=><button className="gift" key={g.id} onClick={()=>sendGift(g)}>{g.emoji} {g.name}<small>{g.price_xaf.toLocaleString("fr-FR")} FCFA</small></button>)}</div></section>}
+
+    {cameraOpen && <section className="studio">
       <div className="studioTop"><div><span className="badge">● TON LIVE</span><h2>{selectedLive?.title}</h2></div><button onClick={endLive}>Terminer le live</button></div>
       <video ref={videoRef} autoPlay playsInline muted />
       <p>Diffusion WebRTC active pour les spectateurs compatibles. Autorise caméra et micro pour démarrer.</p>
@@ -128,7 +157,9 @@ function App() {
       </article>)}</div>}
     </section>
 
-    {giftFeed.length>0 && <section className="section"><h2>Cadeaux en temps réel</h2><div className="giftRow">{giftFeed.slice(0,8).map(g=><span className="gift mini" key={g.id}>🎁 {g.amount_xaf.toLocaleString("fr-FR")} FCFA</span>)}</div></section>}\n\n    <section className="cards">
+    {giftFeed.length>0 && <section className="section"><h2>Cadeaux en temps réel</h2><div className="giftRow">{giftFeed.slice(0,8).map(g=><span className="gift mini" key={g.id}>🎁 {g.amount_xaf.toLocaleString("fr-FR")} FCFA</span>)}</div></section>}
+
+    <section className="cards">
       <article><b>🔴</b><h3>Lives</h3><p>Découvre les diffusions en direct.</p></article>
       <article><b>💬</b><h3>Communauté</h3><p>Échange avec les autres utilisateurs.</p></article>
       <article><b>🎁</b><h3>Cadeaux</h3><p>Envoie des cadeaux virtuels aux créateurs.</p></article>
