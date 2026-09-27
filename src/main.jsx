@@ -51,10 +51,33 @@ function App() {
     const result = mode === "signup"
       ? await supabase.auth.signUp({ email, password, options: { data: { display_name: displayName, username: displayName.toLowerCase().replace(/[^a-z0-9_]/g, "_") } } })
       : await supabase.auth.signInWithPassword({ email, password });
-    if (result.error) setMessage(result.error.message);
-    else {
-      setMessage(mode === "signup" ? "Compte créé. Vérifie ton e-mail si Supabase le demande." : "Connecté.");
-      if (mode === "login") setAuthOpen(false);
+    if (result.error) {
+      const raw = result.error.message || "Une erreur est survenue.";
+      const lower = raw.toLowerCase();
+      let friendly = raw;
+      if (lower.includes("rate limit") || lower.includes("too many")) {
+        friendly = "Trop de tentatives. Attends quelques minutes puis réessaie. Si le problème continue, vérifie les limites d’e-mails de Supabase.";
+      } else if (lower.includes("email not confirmed")) {
+        friendly = "Compte créé mais e-mail non confirmé. Ouvre le message de confirmation envoyé par Sweet Live, puis reconnecte-toi.";
+      } else if (lower.includes("user already registered")) {
+        friendly = "Ce compte existe déjà. Passe sur « Se connecter » avec cet e-mail.";
+      } else if (lower.includes("password")) {
+        friendly = "Mot de passe refusé. Utilise au moins 6 caractères et vérifie les règles configurées dans Supabase.";
+      } else if (lower.includes("fetch") || lower.includes("network")) {
+        friendly = "Connexion au serveur impossible. Vérifie Internet puis réessaie. Si l’erreur revient, le diagnostic serveur doit être vérifié.";
+      }
+      setMessage(friendly);
+      return;
+    }
+    if (mode === "signup") {
+      const needsConfirmation = !result.data?.session;
+      setMessage(needsConfirmation
+        ? "Compte créé. Étape suivante : confirme ton e-mail, puis reconnecte-toi."
+        : "Compte créé et connecté. Bienvenue sur Sweet Live.");
+      if (!needsConfirmation) setAuthOpen(false);
+    } else {
+      setMessage("Connecté.");
+      setAuthOpen(false);
     }
   }
 
