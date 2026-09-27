@@ -17,6 +17,11 @@ function App() {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [giftFeed, setGiftFeed] = useState([]);
+  const [pendingPurchase, setPendingPurchase] = useState(null);
+  const [paymentOpen, setPaymentOpen] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState("mtn_momo");
+  const [payerPhone, setPayerPhone] = useState("");
+  const [paymentBusy, setPaymentBusy] = useState(false);
   const viewerVideoRef = useRef(null);
   const peerRef = useRef(null);
   const videoRef = useRef(null);
@@ -26,7 +31,7 @@ function App() {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
     loadData();
-    const giftChannel = supabase.channel("sweet-live-gifts").on("postgres_changes",{event:"INSERT",schema:"public",table:"gift_purchases"},payload=>setGiftFeed(v=>[payload.new,...v].slice(0,20))).subscribe();
+    const giftChannel = supabase.channel("sweet-live-gifts").on("postgres_changes",{event:"*",schema:"public",table:"gift_purchases"},payload=>{ if(payload.eventType==="INSERT") setGiftFeed(v=>[payload.new,...v].slice(0,20)); if(payload.eventType==="UPDATE" && pendingPurchase?.id===payload.new.id) setPendingPurchase(payload.new); }).subscribe();
     return () => { listener.subscription.unsubscribe(); supabase.removeChannel(giftChannel); };
 
   }, []);
@@ -114,12 +119,42 @@ function App() {
   async function sendGift(gift) {
     if (!session) { setAuthOpen(true); return; }
     if (!selectedLive) { setMessage("Ouvre d'abord un live à soutenir."); return; }
-    const { error } = await supabase.from("gift_purchases").insert({
+    const { data, error } = await supabase.from("gift_purchases").insert({
       gift_id: gift.id, live_id: selectedLive.id, sender_id: session.user.id,
       host_id: selectedLive.host_id, amount_xaf: gift.price_xaf, payment_status: "pending"
+    }).select("*").single();
+    if (error) { setMessage(error.message); return; }
+    setPendingPurchase(data);
+    setPayerPhone("");
+    setPaymentMethod("mtn_momo");
+    setPaymentOpen(true);
+  }
+
+  async function payForGift() {
+    if (!pendingPurchase) return;
+    const phone = payerPhone.trim();
+    if (!/^\+?2376\d{8}$/.test(phone.replace(/\s/g, "")) && !/^6\d{8}$/.test(phone.replace(/\s/g, ""))) {
+      setMessage("Entre un numéro camerounais valide, par exemple +237 6XXXXXXXX.");
+      return;
+    }
+    setPaymentBusy(true);
+    setMessage("");
+    const { data, error } = await supabase.functions.invoke("notchpay-create-gift", {
+      body: {
+        giftPurchaseId: pendingPurchase.id,
+        phone,
+        channel: paymentMethod === "mtn_momo" ? "cm.mtn" : "cm.orange",
+        origin: window.location.origin
+      }
     });
-    if (error) setMessage(error.message);
-    else setMessage(gift.name + " ajouté au paiement. Choisis MTN MoMo ou Orange Money dans l'étape de paiement.");
+    setPaymentBusy(false);
+    if (error) { setMessage(error.message || "Erreur de paiement."); return; }
+    if (data?.authorization_url) {
+      window.location.href = data.authorization_url;
+      return;
+    }
+    setMessage(data?.message || "Demande de paiement envoyée. Confirme-la sur ton téléphone.");
+    setPaymentOpen(false);
   }
 
   return <main className="app">
@@ -156,6 +191,21 @@ function App() {
         <div className="giftRow">{gifts.slice(0,3).map(g => <button className="gift mini" key={g.id} onClick={(e)=>{e.stopPropagation(); openViewer(l); sendGift(g)}}>{g.emoji} {g.price_xaf} FCFA</button>)}</div>
       </article>)}</div>}
     </section>
+
+    {paymentOpen && pendingPurchase && <div className="modal"><div className="modalBox">
+      <button className="close" onClick={()=>!paymentBusy&&setPaymentOpen(false)}>×</button>
+      <h2>🎁 Payer le cadeau</h2>
+      <p>Montant : <strong>{pendingPurchase.amount_xaf.toLocaleString("fr-FR")} FCFA</strong></p>
+      <label>Mode de paiement</label>
+      <select value={paymentMethod} onChange={e=>setPaymentMethod(e.target.value)} disabled={paymentBusy}>
+        <option value="mtn_momo">MTN Mobile Money</option>
+        <option value="orange_money">Orange Money</option>
+      </select>
+      <label>Numéro Mobile Money</label>
+      <input inputMode="tel" placeholder="+237 6XXXXXXXX" value={payerPhone} onChange={e=>setPayerPhone(e.target.value)} disabled={paymentBusy} />
+      <button onClick={payForGift} disabled={paymentBusy}>{paymentBusy ? "Envoi de la demande..." : "💳 Payer maintenant"}</button>
+      <p className="formMessage">Une demande de confirmation sera envoyée sur ton téléphone.</p>
+    </div></div>}
 
     {giftFeed.length>0 && <section className="section"><h2>Cadeaux en temps réel</h2><div className="giftRow">{giftFeed.slice(0,8).map(g=><span className="gift mini" key={g.id}>🎁 {g.amount_xaf.toLocaleString("fr-FR")} FCFA</span>)}</div></section>}
 
